@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Person API Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        button { padding: 10px 20px; margin: 10px; font-size: 16px; }
+        #result { margin-top: 20px; padding: 20px; background: #f0f0f0; white-space: pre-wrap; }
+        .success { color: green; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>Person REST API Test</h1>
+    <p>Test the API with rapid requests (like Ctrl+F5 refresh)</p>
+    
+    <button onclick="testSingle()">Single Request</button>
+    <button onclick="testRapid()">10 Rapid Requests</button>
+    <button onclick="testConcurrent()">10 Concurrent Requests</button>
+    <button onclick="clearResults()">Clear</button>
+    
+    <div id="result"></div>
+    
+    <script>
+        const resultDiv = document.getElementById('result');
+        
+        function log(message, isError = false) {
+            const line = document.createElement('div');
+            line.className = isError ? 'error' : 'success';
+            line.textContent = new Date().toLocaleTimeString() + ' - ' + message;
+            resultDiv.appendChild(line);
+        }
+        
+        function clearResults() {
+            resultDiv.innerHTML = '';
+        }
+        
+        async function testSingle() {
+            try {
+                const response = await fetch('http://127.0.0.1:8080/people');
+                const data = await response.json();
+                log('Success: Got ' + data.length + ' people');
+            } catch (error) {
+                log('Error: ' + error.message, true);
+            }
+        }
+        
+        async function testRapid() {
+            log('Starting 10 rapid sequential requests...');
+            for (let i = 1; i <= 10; i++) {
+                try {
+                    const response = await fetch('http://127.0.0.1:8080/people');
+                    const data = await response.json();
+                    log(`Request ${i}/10: Success (${data.length} people)`);
+                } catch (error) {
+                    log(`Request ${i}/10: Error - ${error.message}`, true);
+                }
+            }
+        }
+        
+        async function testConcurrent() {
+            log('Starting 10 concurrent requests...');
+            const promises = [];
+            for (let i = 1; i <= 10; i++) {
+                promises.push(
+                    fetch('http://127.0.0.1:8080/people')
+                        .then(r => r.json())
+                        .then(data => log(`Concurrent request ${i}: Success (${data.length} people)`))
+                        .catch(error => log(`Concurrent request ${i}: Error - ${error.message}`, true))
+                );
+            }
+            await Promise.all(promises);
+            log('All concurrent requests completed!');
+        }
+    </script>
+</body>
+</html>
