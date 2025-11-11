@@ -12,6 +12,8 @@ pub fn main() !void {
     var env = try dotenv.init(allocator, ".env");
     defer env.deinit();
 
+    const worker_threads = try std.fmt.parseInt(usize, env.get("SERVER_WORKER_THREADS") orelse "40", 10);
+
     var pool = try pg.Pool.init(allocator, .{ .size = try std.fmt.parseInt(u16, env.get("POSTGRES_POOL_SIZE") orelse "40", 10), .connect = .{
         .port = 5432,
         .host = "127.0.0.1",
@@ -24,8 +26,10 @@ pub fn main() !void {
     defer pool.deinit();
 
     // Create and start server
-    var server = try server_mod.Server.init(allocator, "127.0.0.1", 8080, pool);
+    var server = try server_mod.Server.init(allocator, "127.0.0.1", 8080, pool, worker_threads);
     defer server.deinit();
+
+    std.debug.print("Worker threads: {d}\n", .{worker_threads});
 
     std.debug.print("REST API Server running\n", .{});
     std.debug.print("Available endpoints:\n", .{});
