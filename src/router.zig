@@ -1,8 +1,9 @@
 const std = @import("std");
 const http = @import("./http.zig");
 const playground = @import("playground");
+const pg = @import("pg");
 
-pub const RouteHandler = *const fn (*playground.PersonStore, *const http.Request, std.mem.Allocator) anyerror!http.Response;
+pub const RouteHandler = *const fn (*const http.Request, std.mem.Allocator, *pg.Pool) anyerror!http.Response;
 
 pub const Route = struct {
     method: http.Method,
@@ -12,14 +13,14 @@ pub const Route = struct {
 
 pub const Router = struct {
     routes: std.ArrayList(Route),
-    store: *playground.PersonStore,
     allocator: std.mem.Allocator,
+    pool: *pg.Pool,
 
-    pub fn init(allocator: std.mem.Allocator, store: *playground.PersonStore) Router {
+    pub fn init(allocator: std.mem.Allocator, pool: *pg.Pool) Router {
         return .{
             .routes = .empty,
-            .store = store,
             .allocator = allocator,
+            .pool = pool,
         };
     }
 
@@ -47,12 +48,12 @@ pub const Router = struct {
 
             // Exact match
             if (std.mem.eql(u8, r.pattern, request.path)) {
-                return r.handler(self.store, request, self.allocator);
+                return r.handler(request, self.allocator, self.pool);
             }
 
             // Pattern match (e.g., /people/:id)
             if (matchPattern(r.pattern, request.path)) {
-                return r.handler(self.store, request, self.allocator);
+                return r.handler(request, self.allocator, self.pool);
             }
         }
 
@@ -98,8 +99,8 @@ pub fn extractId(path: []const u8) ?usize {
 }
 
 // Handler functions
-pub fn handleGetAll(store: *playground.PersonStore, request: *const http.Request, allocator: std.mem.Allocator) !http.Response {
-    _ = store; // Will be handled via streaming
+pub fn handleGetAll(request: *const http.Request, allocator: std.mem.Allocator, pool: *pg.Pool) !http.Response {
+    _ = pool; // Will be handled via streaming
     // Create a special streaming response marker
     // We'll handle this specially in the server to stream the data
     const marker = try allocator.dupe(u8, "STREAM");
@@ -108,7 +109,7 @@ pub fn handleGetAll(store: *playground.PersonStore, request: *const http.Request
 }
 
 /// Stream the people array with chunked transfer encoding
-pub fn streamGetAllResponse(stream: std.net.Stream, store: *playground.PersonStore, allocator: std.mem.Allocator, keep_alive: bool) !void {
+pub fn streamGetAllResponse(stream: std.net.Stream, pool: *pg.Pool, allocator: std.mem.Allocator, keep_alive: bool) !void {
     var header_buf: std.ArrayList(u8) = .empty;
     defer header_buf.deinit(allocator);
 
@@ -129,7 +130,8 @@ pub fn streamGetAllResponse(stream: std.net.Stream, store: *playground.PersonSto
     try stream.writeAll(header_buf.items);
 
     // Stream the JSON array
-    const all = try store.getAll();
+    const result = try pool.query("SELECT name, age, job FROM people", .{});
+    defer result.deinit();
 
     // Reuse a single buffer for all chunks to avoid repeated allocations
     var chunk_buf: std.ArrayList(u8) = .empty;
@@ -138,17 +140,24 @@ pub fn streamGetAllResponse(stream: std.net.Stream, store: *playground.PersonSto
     // Write opening bracket as first chunk
     try http.writeChunk(stream, "[");
 
+    var is_first = true;
+
     // Write each person as a separate chunk with flush
-    for (all, 0..) |person, i| {
+    while (try result.next()) |row| {
+        const name = row.get([]u8, 0);
+        const age = row.get(i32, 1);
+        const job = row.get([]u8, 2);
+
         chunk_buf.clearRetainingCapacity();
 
-        if (i > 0) {
+        if (!is_first) {
             try chunk_buf.appendSlice(allocator, ",");
         }
 
-        try std.fmt.format(chunk_buf.writer(allocator), "{{\"name\":\"{s}\",\"age\":{d},\"job\":\"{s}\"}}", .{ person.name, person.age, person.job });
+        try std.fmt.format(chunk_buf.writer(allocator), "{{\"name\":\"{s}\",\"age\":{d},\"job\":\"{s}\"}}", .{ name, age, job });
 
         try http.writeChunk(stream, chunk_buf.items);
+        is_first = false;
     }
 
     // Write closing bracket
@@ -158,15 +167,18 @@ pub fn streamGetAllResponse(stream: std.net.Stream, store: *playground.PersonSto
     try stream.writeAll("0\r\n\r\n");
 }
 
-pub fn handleGetOne(store: *playground.PersonStore, request: *const http.Request, allocator: std.mem.Allocator) !http.Response {
+pub fn handleGetOne(request: *const http.Request, allocator: std.mem.Allocator, pool: *pg.Pool) !http.Response {
     const id = extractId(request.path) orelse return http.Response.json(.bad_request, "{\"error\":\"Invalid ID\"}", request.wantsKeepAlive());
 
-    const person = try store.get(id);
-    if (person) |p| {
+    var result = try pool.query("SELECT name, age, job FROM people WHERE id = $1", .{id});
+    defer result.deinit();
+    while (try result.next()) |row| {
+        const name = row.get([]u8, 0);
+        const age = row.get(i32, 1);
+        const job = row.get([]u8, 2);
         var buffer: std.ArrayList(u8) = .empty;
         defer buffer.deinit(allocator);
-        try std.fmt.format(buffer.writer(allocator), "{{\"name\":\"{s}\",\"age\":{d},\"job\":\"{s}\"}}", .{ p.name, p.age, p.job });
-
+        try std.fmt.format(buffer.writer(allocator), "{{\"name\":\"{s}\",\"age\":{d},\"job\":\"{s}\"}}", .{ name, age, job });
         const response_body = try allocator.dupe(u8, buffer.items);
         var response = http.Response.json(.ok, response_body, request.wantsKeepAlive());
         response.allocator = allocator;
@@ -176,12 +188,12 @@ pub fn handleGetOne(store: *playground.PersonStore, request: *const http.Request
     }
 }
 
-pub fn handleCreate(store: *playground.PersonStore, request: *const http.Request, allocator: std.mem.Allocator) !http.Response {
+pub fn handleCreate(request: *const http.Request, allocator: std.mem.Allocator, pool: *pg.Pool) !http.Response {
     const parsed = try std.json.parseFromSlice(playground.Person, allocator, request.body, .{});
     defer parsed.deinit();
 
     const person = parsed.value;
-    try store.add(person);
+    _ = try pool.exec("INSERT INTO people (name, age, job) VALUES ($1, $2, $3) RETURNING id", .{ person.name, person.age, person.job });
 
     var buffer: std.ArrayList(u8) = .empty;
     defer buffer.deinit(allocator);
@@ -193,14 +205,15 @@ pub fn handleCreate(store: *playground.PersonStore, request: *const http.Request
     return response;
 }
 
-pub fn handleUpdate(store: *playground.PersonStore, request: *const http.Request, allocator: std.mem.Allocator) !http.Response {
+pub fn handleUpdate(request: *const http.Request, allocator: std.mem.Allocator, pool: *pg.Pool) !http.Response {
     const id = extractId(request.path) orelse return http.Response.json(.bad_request, "{\"error\":\"Invalid ID\"}", request.wantsKeepAlive());
 
     const parsed = try std.json.parseFromSlice(playground.Person, allocator, request.body, .{});
     defer parsed.deinit();
 
     const person = parsed.value;
-    const success = try store.update(id, person);
+
+    const success = try pool.exec("UPDATE people SET name = $1, age = $2, job = $3 WHERE id = $4", .{ person.name, person.age, person.job, id }) orelse 0 > 0;
 
     if (success) {
         var buffer: std.ArrayList(u8) = .empty;
@@ -216,11 +229,11 @@ pub fn handleUpdate(store: *playground.PersonStore, request: *const http.Request
     }
 }
 
-pub fn handleDelete(store: *playground.PersonStore, request: *const http.Request, allocator: std.mem.Allocator) !http.Response {
+pub fn handleDelete(request: *const http.Request, allocator: std.mem.Allocator, pool: *pg.Pool) !http.Response {
     _ = allocator;
     const id = extractId(request.path) orelse return http.Response.json(.bad_request, "{\"error\":\"Invalid ID\"}", request.wantsKeepAlive());
 
-    const success = try store.delete(id);
+    const success = try pool.exec("DELETE FROM people WHERE id = $1", .{id}) orelse 0 > 0;
     if (success) {
         return http.Response.json(.ok, "{\"message\":\"Deleted\"}", request.wantsKeepAlive());
     } else {

@@ -2,6 +2,7 @@ const std = @import("std");
 const http = @import("./http.zig");
 const router = @import("./router.zig");
 const playground = @import("playground");
+const pg = @import("pg");
 
 const ConnectionContext = struct {
     stream: std.net.Stream,
@@ -14,9 +15,9 @@ pub const Server = struct {
     router: router.Router,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16, store: *playground.PersonStore) !Server {
+    pub fn init(allocator: std.mem.Allocator, host: []const u8, port: u16, pool: *pg.Pool) !Server {
         const address = try std.net.Address.parseIp(host, port);
-        var rt = router.Router.init(allocator, store);
+        var rt = router.Router.init(allocator, pool);
 
         // Register routes
         try rt.addRoute(.GET, "/people", router.handleGetAll);
@@ -102,7 +103,7 @@ fn handleConnection(context: *ConnectionContext) void {
 
         // Check for streaming response (GET /people)
         if (request.method == .GET and std.mem.eql(u8, request.path, "/people")) {
-            router.streamGetAllResponse(context.stream, context.router.store, context.allocator, request.wantsKeepAlive()) catch |err| {
+            router.streamGetAllResponse(context.stream, context.router.pool, context.allocator, request.wantsKeepAlive()) catch |err| {
                 std.debug.print("Error streaming response: {}\n", .{err});
                 return;
             };

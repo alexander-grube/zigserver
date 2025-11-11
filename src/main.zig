@@ -1,29 +1,30 @@
 const std = @import("std");
 const playground = @import("playground");
 const server_mod = @import("./server.zig");
+const pg = @import("pg");
+const dotenv = @import("./dotenv.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Initialize person store with sample data
-    var store = playground.PersonStore.init(allocator);
-    defer store.deinit();
+    var env = try dotenv.init(allocator, ".env");
+    defer env.deinit();
 
-    try store.add(.{
-        .name = try allocator.dupe(u8, "Alice Smith"),
-        .age = 28,
-        .job = try allocator.dupe(u8, "Software Engineer"),
-    });
-    try store.add(.{
-        .name = try allocator.dupe(u8, "Bob Johnson"),
-        .age = 35,
-        .job = try allocator.dupe(u8, "Product Manager"),
-    });
+    var pool = try pg.Pool.init(allocator, .{ .size = try std.fmt.parseInt(u16, env.get("POSTGRES_POOL_SIZE") orelse "40", 10), .connect = .{
+        .port = 5432,
+        .host = "127.0.0.1",
+    }, .auth = .{
+        .username = env.get("POSTGRES_USER") orelse "postgres",
+        .database = env.get("POSTGRES_DB") orelse "postgres",
+        .password = env.get("POSTGRES_PASSWORD") orelse "password",
+        .timeout = 10_000,
+    } });
+    defer pool.deinit();
 
     // Create and start server
-    var server = try server_mod.Server.init(allocator, "127.0.0.1", 8080, &store);
+    var server = try server_mod.Server.init(allocator, "127.0.0.1", 8080, pool);
     defer server.deinit();
 
     std.debug.print("REST API Server running\n", .{});
