@@ -14,7 +14,9 @@ pub fn main() !void {
 
     const worker_threads = try std.fmt.parseInt(usize, env.get("SERVER_WORKER_THREADS") orelse "40", 10);
 
-    var pool = try pg.Pool.init(allocator, .{ .size = try std.fmt.parseInt(u16, env.get("POSTGRES_POOL_SIZE") orelse "40", 10), .connect = .{
+    const postgres_pool_size = try std.fmt.parseInt(u16, env.get("POSTGRES_POOL_SIZE") orelse "40", 10);
+
+    var pool = try pg.Pool.init(allocator, .{ .size = postgres_pool_size, .connect = .{
         .port = 5432,
         .host = "127.0.0.1",
     }, .auth = .{
@@ -30,6 +32,7 @@ pub fn main() !void {
     defer server.deinit();
 
     std.debug.print("Worker threads: {d}\n", .{worker_threads});
+    std.debug.print("Postgres pool size: {d}\n", .{postgres_pool_size});
 
     std.debug.print("REST API Server running\n", .{});
     std.debug.print("Available endpoints:\n", .{});

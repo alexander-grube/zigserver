@@ -1,8 +1,6 @@
 # zigserver
 
-This project is for recreational purposes to demonstrate building a REST API server in Zig. It features a simple in-memory data store for managing "Person" records.
-
-Later it should use either SQLite or Postgres for persistent storage.
+This project is for recreational purposes to demonstrate building a REST API server in Zig.
 
 Also will try to optimize for performance and low memory usage. Data Oriented Design (DOD) principles will be applied where possible.
 
