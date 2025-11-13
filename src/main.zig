@@ -5,9 +5,7 @@ const pg = @import("pg");
 const dotenv = @import("./dotenv.zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.heap.smp_allocator;
 
     var env = try dotenv.init(allocator, ".env");
     defer env.deinit();
