@@ -166,11 +166,7 @@ fn handleConnection(stream: std.net.Stream, rt: *router.Router, allocator: std.m
         const request_data = buffer[0..bytes_read];
 
         // Parse request
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-
-        const arena_allocator = arena.allocator();
-        var request = http.Request.init(arena_allocator, request_data) catch |err| {
+        var request = http.Request.init(allocator, request_data) catch |err| {
             std.debug.print("Error parsing request: {}\n", .{err});
             const error_response = http.Response.json(.bad_request, "{\"error\":\"Invalid request\"}", false);
             error_response.write(allocator, stream) catch {};
@@ -185,7 +181,7 @@ fn handleConnection(stream: std.net.Stream, rt: *router.Router, allocator: std.m
 
         // Check for streaming response (GET /people)
         if (request.method == .GET and std.mem.eql(u8, request.path, "/people")) {
-            router.streamGetAllResponse(stream, rt.pool, arena_allocator, request.wantsKeepAlive()) catch |err| {
+            router.streamGetAllResponse(stream, rt.pool, allocator, request.wantsKeepAlive()) catch |err| {
                 std.debug.print("Error streaming response: {}\n", .{err});
                 return;
             };
@@ -206,7 +202,7 @@ fn handleConnection(stream: std.net.Stream, rt: *router.Router, allocator: std.m
         defer response.deinit();
 
         // Send response
-        response.write(arena_allocator, stream) catch |err| {
+        response.write(allocator, stream) catch |err| {
             std.debug.print("Error sending response: {}\n", .{err});
             return;
         };
